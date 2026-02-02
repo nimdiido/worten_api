@@ -325,7 +325,6 @@ class WortenScraper:
             self._accept_cookies(driver)
 
             # Espera os cards de produto carregarem (até 15 segundos)
-            product_loaded = False
             for _ in range(15):
                 time.sleep(1)
                 try:
