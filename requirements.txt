@@ -1,0 +1,11 @@
+Django>=5.0
+djangorestframework>=3.14
+drf-yasg>=1.21
+requests>=2.31
+beautifulsoup4>=4.12
+pandas>=2.0
+openpyxl>=3.1
+selenium>=4.15
+undetected-chromedriver>=3.5
+setuptools>=70.0  # required for distutils on Python 3.12+
+webdriver-manager>=4.0
