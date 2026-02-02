@@ -12,7 +12,6 @@ import json
 import logging
 import time
 import subprocess
-import atexit
 from dataclasses import dataclass
 from typing import Optional, Dict, Any
 from decimal import Decimal
@@ -22,10 +21,6 @@ import requests
 from bs4 import BeautifulSoup
 
 logger = logging.getLogger(__name__)
-
-# Suprime warnings do undetected_chromedriver __del__
-import warnings
-warnings.filterwarnings("ignore", message=".*Exception ignored.*Chrome.__del__.*", category=UserWarning)
 
 # Tenta importar componentes do Selenium
 SELENIUM_AVAILABLE = False
@@ -54,6 +49,7 @@ except ImportError:
 
 try:
     from webdriver_manager.chrome import ChromeDriverManager
+
     WEBDRIVER_MANAGER_AVAILABLE = True
 except ImportError:
     pass
@@ -232,18 +228,14 @@ class WortenScraper:
                 driver = self._driver
                 self._driver = None
                 self._cloudflare_passed = False
-                
-                # Desabilita o __del__ do undetected_chromedriver pra evitar o warning
-                if hasattr(driver, '__del__'):
-                    driver.__del__ = lambda: None
-                
+
                 # Tenta parar o serviço primeiro
-                if hasattr(driver, 'service') and driver.service:
+                if hasattr(driver, "service") and driver.service:
                     try:
                         driver.service.stop()
                     except Exception:
                         pass
-                
+
                 # Fecha o browser
                 try:
                     driver.quit()
@@ -258,18 +250,20 @@ class WortenScraper:
 
         Args:
             query: Nome do produto ou termo de busca
-            ean: Código de barras EAN (opcional, mas mais preciso)
+            ean: Código de barras EAN (não utilizado - Worten não indexa por EAN)
 
         Returns:
             ScrapedProduct com os dados extraídos ou informação de erro
         """
-        # Monta os termos de busca - prioriza o NOME do produto (EAN geralmente não retorna resultados)
+        # Monta os termos de busca em ordem de prioridade
         search_terms = []
 
         if query:
-            # Extrai palavras-chave do nome do produto
+            # 1. Tenta o nome completo (inclui dimensões/variantes)
+            search_terms.append(query)
+
+            # 2. Fallback: palavras-chave principais (nome simplificado)
             words = query.split()
-            # Pega as 3-4 primeiras palavras significativas (ignora palavras comuns)
             skip_words = {
                 "de",
                 "da",
@@ -283,14 +277,17 @@ class WortenScraper:
                 "em",
                 "um",
                 "uma",
+                "unidades",
+                "peças",
             }
             significant = [
                 w for w in words if w.lower() not in skip_words and len(w) > 2
             ]
+            # Nome simplificado como fallback
             if significant:
-                search_terms.append(" ".join(significant[:4]))
-            if len(words) <= 5:
-                search_terms.append(query)
+                simplified = " ".join(significant[:6])
+                if simplified != query:
+                    search_terms.append(simplified)
 
         if not search_terms:
             return ScrapedProduct(
@@ -335,16 +332,14 @@ class WortenScraper:
                     # Scroll para forçar lazy loading
                     driver.execute_script("window.scrollTo(0, 300)")
                     # Verifica se tem product cards
-                    cards = driver.find_elements(By.CSS_SELECTOR, ".product-card, article.product-card")
+                    cards = driver.find_elements(
+                        By.CSS_SELECTOR, ".product-card, article.product-card"
+                    )
                     if cards:
-                        product_loaded = True
-                        logger.info(f"Encontrados {len(cards)} product cards")
+                        logger.debug(f"Encontrados {len(cards)} product cards")
                         break
                 except Exception:
                     pass
-            
-            if not product_loaded:
-                logger.warning("Nenhum product card encontrado após espera")
 
             # Verifica se redirecionou pra página do produto
             if "/p/" in driver.current_url:
@@ -579,7 +574,9 @@ class WortenScraper:
             ]:
                 try:
                     product = SeleniumWait(driver, 5).until(
-                        SeleniumEC.presence_of_element_located((SeleniumBy.CSS_SELECTOR, selector))
+                        SeleniumEC.presence_of_element_located(
+                            (SeleniumBy.CSS_SELECTOR, selector)
+                        )
                     )
                     if product:
                         logger.info(f"Produto encontrado com seletor: {selector}")
@@ -595,7 +592,9 @@ class WortenScraper:
             # Extrai URL - tenta link dentro do card
             url = None
             try:
-                link = product.find_element(SeleniumBy.CSS_SELECTOR, 'a[href*="/produtos/"]')
+                link = product.find_element(
+                    SeleniumBy.CSS_SELECTOR, 'a[href*="/produtos/"]'
+                )
                 url = link.get_attribute("href")
             except Exception:
                 try:
@@ -608,7 +607,12 @@ class WortenScraper:
 
             # Extrai nome - seletores atualizados
             name = None
-            for sel in [".product-card__name-and-features", "h3", "h2", '[class*="name"]']:
+            for sel in [
+                ".product-card__name-and-features",
+                "h3",
+                "h2",
+                '[class*="name"]',
+            ]:
                 try:
                     elem = product.find_element(SeleniumBy.CSS_SELECTOR, sel)
                     name = elem.text.strip()
@@ -697,10 +701,14 @@ class WortenScraper:
         except ImportError:
             return None
         # Seletores atualizados para estrutura Worten
-        for selector in [".product-card__price", '[class*="price"]', '[class*="Price"]']:
+        for selector in [
+            ".product-card__price",
+            '[class*="price"]',
+            '[class*="Price"]',
+        ]:
             try:
                 elem = card.find_element(SeleniumBy.CSS_SELECTOR, selector)
-                price_text = elem.text.replace('\n', '').replace(' ', '')
+                price_text = elem.text.replace("\n", "").replace(" ", "")
                 return self._parse_price(price_text)
             except Exception:
                 continue
@@ -733,7 +741,9 @@ class WortenScraper:
         except ImportError:
             return "Worten"
         try:
-            elem = card.find_element(SeleniumBy.CSS_SELECTOR, '.product-card__seller, [class*="seller"]')
+            elem = card.find_element(
+                SeleniumBy.CSS_SELECTOR, '.product-card__seller, [class*="seller"]'
+            )
             seller_text = elem.text.strip()
             # Remove prefixos comuns
             if seller_text.startswith("Vendido por "):
